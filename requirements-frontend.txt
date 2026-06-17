@@ -1,0 +1,6 @@
+# Frontend Dashboard Requirements
+streamlit
+plotly
+pandas
+numpy
+requests

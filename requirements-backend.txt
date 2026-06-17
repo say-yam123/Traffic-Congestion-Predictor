@@ -1,0 +1,12 @@
+# Backend API Requirements
+flask
+flask-cors
+joblib
+scikit-learn
+numpy
+pandas
+python-dotenv
+
+# Additional utilities
+waitress  # Production server for Windows
+

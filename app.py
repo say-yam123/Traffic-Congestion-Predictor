@@ -1,0 +1,275 @@
+"""
+Flask API Backend for Parking Congestion Prediction
+Serves the trained ML models for real-time predictions
+"""
+
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import joblib
+import pickle
+import numpy as np
+import pandas as pd
+import os
+from datetime import datetime
+
+app = Flask(__name__)
+CORS(app)
+
+# Model paths
+MODEL_DIR = './models'
+GBR_MODEL_PATH = os.path.join(MODEL_DIR, 'gbr_severity_model.pkl')
+RF_MODEL_PATH = os.path.join(MODEL_DIR, 'rf_risk_classifier.pkl')
+KMEANS_MODEL_PATH = os.path.join(MODEL_DIR, 'kmeans_hotspots.pkl')
+FEATURES_PATH = os.path.join(MODEL_DIR, 'feature_names.pkl')
+
+# Initialize models as None
+gbr_model = None
+rf_model = None
+kmeans_model = None
+feature_names = None
+
+# Load models
+try:
+    gbr_model = joblib.load(GBR_MODEL_PATH)
+    rf_model = joblib.load(RF_MODEL_PATH)
+    kmeans_model = joblib.load(KMEANS_MODEL_PATH)
+    with open(FEATURES_PATH, 'rb') as f:
+        feature_names = pickle.load(f)
+    print("✓ All models loaded successfully")
+except Exception as e:
+    print(f"⚠ Error loading models: {e}")
+    print("Run the notebook first to train and export models")
+
+# Hotspot zone information (from notebook analysis)
+HOTSPOT_ZONES = {
+    'Zone 5': {'station': 'Upparpet', 'lat_range': [12.97, 13.01], 'lon_range': [77.57, 77.62]},
+    'Zone 0': {'station': 'Malleshwaram', 'lat_range': [12.98, 13.03], 'lon_range': [77.53, 77.58]},
+    'Zone 1': {'station': 'HAL Old Airport', 'lat_range': [12.91, 12.96], 'lon_range': [77.65, 77.72]},
+    'Zone 2': {'station': 'HSR Layout', 'lat_range': [12.91, 12.95], 'lon_range': [77.63, 77.68]},
+    'Zone 4': {'station': 'Kodigehalli', 'lat_range': [13.04, 13.09], 'lon_range': [77.56, 77.61]},
+    'Zone 3': {'station': 'Chikkajala', 'lat_range': [13.23, 13.29], 'lon_range': [77.52, 77.57]},
+}
+
+def prepare_features(input_data):
+    """Prepare input data for model prediction"""
+    try:
+        features_list = [
+            input_data.get('latitude', 13.0),
+            input_data.get('longitude', 77.6),
+            input_data.get('cell_violations', 0),
+            input_data.get('cell_density', 0),
+            input_data.get('hour', 12),
+            input_data.get('day_of_week', 3),
+            input_data.get('is_peak_hour', 0),
+            input_data.get('has_wrong_parking', 0),
+            input_data.get('has_no_parking', 0),
+            input_data.get('has_main_road', 0)
+        ]
+        return np.array([features_list])
+    except Exception as e:
+        return None
+
+def find_zone(latitude, longitude):
+    """Identify which hotspot zone the location belongs to"""
+    for zone_name, zone_info in HOTSPOT_ZONES.items():
+        if (zone_info['lat_range'][0] <= latitude <= zone_info['lat_range'][1] and
+            zone_info['lon_range'][0] <= longitude <= zone_info['lon_range'][1]):
+            return zone_name, zone_info['station']
+    return 'Unknown', 'N/A'
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'models_loaded': all([
+            gbr_model is not None,
+            rf_model is not None,
+            kmeans_model is not None,
+            feature_names is not None
+        ])
+    }), 200
+
+@app.route('/predict/severity', methods=['POST'])
+def predict_severity():
+    """
+    Predict violation severity at a given location and time
+    Expected JSON input:
+    {
+        "latitude": 13.05,
+        "longitude": 77.60,
+        "cell_violations": 15,
+        "cell_density": 0.8,
+        "hour": 18,
+        "day_of_week": 4,
+        "is_peak_hour": 1,
+        "has_wrong_parking": 1,
+        "has_no_parking": 0,
+        "has_main_road": 1
+    }
+    """
+    try:
+        if gbr_model is None:
+            return jsonify({'error': 'Models are not loaded. Please train and export models from the notebook first.'}), 503
+        data = request.get_json()
+        
+        # Prepare features
+        X = prepare_features(data)
+        if X is None:
+            return jsonify({'error': 'Invalid input data'}), 400
+        
+        # Make prediction
+        severity_score = gbr_model.predict(X)[0]
+        
+        # Find zone
+        zone_name, station = find_zone(data.get('latitude', 13.0), 
+                                       data.get('longitude', 77.6))
+        
+        return jsonify({
+            'severity_score': float(severity_score),
+            'severity_level': classify_severity(severity_score),
+            'zone': zone_name,
+            'station': station,
+            'latitude': data.get('latitude'),
+            'longitude': data.get('longitude'),
+            'timestamp': datetime.now().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/predict/risk', methods=['POST'])
+def predict_risk():
+    """
+    Predict if a location is high-risk (violation_severity >= 4)
+    Uses Random Forest classifier
+    """
+    try:
+        if rf_model is None:
+            return jsonify({'error': 'Models are not loaded. Please train and export models from the notebook first.'}), 503
+        data = request.get_json()
+        
+        # Prepare features
+        X = prepare_features(data)
+        if X is None:
+            return jsonify({'error': 'Invalid input data'}), 400
+        
+        # Make predictions
+        risk_prediction = rf_model.predict(X)[0]
+        risk_probability = rf_model.predict_proba(X)[0]
+        
+        # Find zone
+        zone_name, station = find_zone(data.get('latitude', 13.0), 
+                                       data.get('longitude', 77.6))
+        
+        return jsonify({
+            'is_high_risk': bool(risk_prediction),
+            'risk_probability': float(risk_probability[1]),
+            'low_risk_probability': float(risk_probability[0]),
+            'zone': zone_name,
+            'station': station,
+            'recommendation': get_risk_recommendation(risk_probability[1]),
+            'timestamp': datetime.now().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/predict/batch', methods=['POST'])
+def predict_batch():
+    """
+    Batch prediction for multiple locations
+    Expected JSON: {"locations": [{"latitude": ..., "longitude": ..., ...}, ...]}
+    """
+    try:
+        if gbr_model is None or rf_model is None:
+            return jsonify({'error': 'Models are not loaded. Please train and export models from the notebook first.'}), 503
+        data = request.get_json()
+        locations = data.get('locations', [])
+        
+        if not locations:
+            return jsonify({'error': 'No locations provided'}), 400
+        
+        results = []
+        for loc in locations:
+            X = prepare_features(loc)
+            if X is not None:
+                severity = gbr_model.predict(X)[0]
+                risk = rf_model.predict(X)[0]
+                zone, station = find_zone(loc.get('latitude', 13.0), 
+                                         loc.get('longitude', 77.6))
+                
+                results.append({
+                    'location': {'lat': loc.get('latitude'), 'lon': loc.get('longitude')},
+                    'severity_score': float(severity),
+                    'is_high_risk': bool(risk),
+                    'zone': zone,
+                    'station': station
+                })
+        
+        return jsonify({
+            'total_locations': len(locations),
+            'predictions': results,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/zones', methods=['GET'])
+def get_zones():
+    """Get information about all hotspot zones"""
+    zones_data = []
+    for zone_name, zone_info in HOTSPOT_ZONES.items():
+        zones_data.append({
+            'zone': zone_name,
+            'station': zone_info['station'],
+            'latitude_range': zone_info['lat_range'],
+            'longitude_range': zone_info['lon_range']
+        })
+    return jsonify({'zones': zones_data}), 200
+
+@app.route('/analytics/zones', methods=['GET'])
+def zone_analytics():
+    """Get analytics for all zones"""
+    zone_stats = {
+        'Zone 5': {'violations': 123778, 'high_severity': 31.1, 'resources': '8 patrol units'},
+        'Zone 0': {'violations': 69076, 'high_severity': 31.1, 'resources': '5 patrol units'},
+        'Zone 1': {'violations': 48600, 'high_severity': 35.4, 'resources': '4 patrol units'},
+        'Zone 2': {'violations': 25154, 'high_severity': 31.7, 'resources': '2 patrol units'},
+        'Zone 4': {'violations': 21920, 'high_severity': 30.7, 'resources': '1 patrol unit'},
+        'Zone 3': {'violations': 6881, 'high_severity': 34.3, 'resources': '1 patrol unit'},
+    }
+    return jsonify(zone_stats), 200
+
+def classify_severity(score):
+    """Classify severity score into categories"""
+    if score < 2:
+        return 'Low'
+    elif score < 4:
+        return 'Medium'
+    elif score < 6:
+        return 'High'
+    else:
+        return 'Critical'
+
+def get_risk_recommendation(probability):
+    """Get recommendation based on risk probability"""
+    if probability > 0.75:
+        return 'DEPLOY IMMEDIATE ENFORCEMENT'
+    elif probability > 0.5:
+        return 'INCREASE PATROL PRESENCE'
+    elif probability > 0.25:
+        return 'MONITOR CLOSELY'
+    else:
+        return 'ROUTINE PATROL'
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': 'Internal server error'}), 500
+
+if __name__ == '__main__':
+    print("Starting Parking Congestion API...")
+    app.run(debug=True, host='0.0.0.0', port=5000)
