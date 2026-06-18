@@ -6,7 +6,7 @@ import pickle
 import joblib
 import sys
 
-def export_models(gbr_model, rf_model, kmeans, feature_names, output_dir='./models'):
+def export_models(gbr_model, rf_model, kmeans, scaler, feature_names, output_dir='./models'):
     """Export trained models to pickle files"""
     import os
     os.makedirs(output_dir, exist_ok=True)
@@ -25,6 +25,11 @@ def export_models(gbr_model, rf_model, kmeans, feature_names, output_dir='./mode
     kmeans_path = os.path.join(output_dir, 'kmeans_hotspots.pkl')
     joblib.dump(kmeans, kmeans_path)
     print(f"✓ Exported K-Means Model: {kmeans_path}")
+
+    # Export Scaler
+    scaler_path = os.path.join(output_dir, 'geo_scaler.pkl')
+    joblib.dump(scaler, scaler_path)
+    print(f"✓ Exported Scaler: {scaler_path}")
     
     # Export feature names
     features_path = os.path.join(output_dir, 'feature_names.pkl')
