@@ -17,6 +17,7 @@ CORS(app)
 
 # Model paths
 MODEL_DIR = './models'
+SCALER_PATH = os.path.join(MODEL_DIR, 'geo_scaler.pkl')
 GBR_MODEL_PATH = os.path.join(MODEL_DIR, 'gbr_severity_model.pkl')
 RF_MODEL_PATH = os.path.join(MODEL_DIR, 'rf_risk_classifier.pkl')
 KMEANS_MODEL_PATH = os.path.join(MODEL_DIR, 'kmeans_hotspots.pkl')
@@ -31,6 +32,7 @@ feature_names = None
 # Load models
 try:
     gbr_model = joblib.load(GBR_MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
     rf_model = joblib.load(RF_MODEL_PATH)
     kmeans_model = joblib.load(KMEANS_MODEL_PATH)
     with open(FEATURES_PATH, 'rb') as f:
@@ -70,12 +72,17 @@ def prepare_features(input_data):
         return None
 
 def find_zone(latitude, longitude):
-    """Identify which hotspot zone the location belongs to"""
-    for zone_name, zone_info in HOTSPOT_ZONES.items():
-        if (zone_info['lat_range'][0] <= latitude <= zone_info['lat_range'][1] and
-            zone_info['lon_range'][0] <= longitude <= zone_info['lon_range'][1]):
-            return zone_name, zone_info['station']
-    return 'Unknown', 'N/A'
+    """Identify zone using the actual K-Means model"""
+    if kmeans_model is None or scaler is None:
+        return 'Unknown', 'N/A'
+    
+    point_scaled = scaler.transform([[latitude, longitude]])
+    cluster = kmeans_model.predict(point_scaled)[0]
+    
+    zone_name = f'Zone {cluster}'
+    station = HOTSPOT_ZONES.get(zone_name, {}).get('station', 'N/A')
+    return zone_name, station
+
 
 @app.route('/health', methods=['GET'])
 def health():
