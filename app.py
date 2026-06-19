@@ -28,6 +28,7 @@ gbr_model = None
 rf_model = None
 kmeans_model = None
 feature_names = None
+geo_scaler    = None
 
 # Load models
 try:
@@ -35,12 +36,18 @@ try:
     scaler = joblib.load(SCALER_PATH)
     rf_model = joblib.load(RF_MODEL_PATH)
     kmeans_model = joblib.load(KMEANS_MODEL_PATH)
+    geo_scaler    = joblib.load(SCALER_PATH)
     with open(FEATURES_PATH, 'rb') as f:
         feature_names = pickle.load(f)
     print("✓ All models loaded successfully")
 except Exception as e:
     print(f"⚠ Error loading models: {e}")
     print("Run the notebook first to train and export models")
+
+for name, obj in [('GBR', gbr_model), ('RF', rf_model), ('KMeans', kmeans_model),
+                  ('feature_names', feature_names), ('geo_scaler', geo_scaler)]:
+    print(f"{'✓' if obj is not None else '✗'} {name}")
+ 
 
 # Hotspot zone information (from notebook analysis)
 HOTSPOT_ZONES = {
@@ -52,36 +59,42 @@ HOTSPOT_ZONES = {
     'Zone 3': {'station': 'Chikkajala', 'lat_range': [13.23, 13.29], 'lon_range': [77.52, 77.57]},
 }
 
-def prepare_features(input_data):
-    """Prepare input data for model prediction"""
-    try:
-        features_list = [
-            input_data.get('latitude', 13.0),
-            input_data.get('longitude', 77.6),
-            input_data.get('cell_violations', 0),
-            input_data.get('cell_density', 0),
-            input_data.get('hour', 12),
-            input_data.get('day_of_week', 3),
-            input_data.get('is_peak_hour', 0),
-            input_data.get('has_wrong_parking', 0),
-            input_data.get('has_no_parking', 0),
-            input_data.get('has_main_road', 0)
-        ]
-        return np.array([features_list])
-    except Exception as e:
-        return None
+# Cluster → station mapping (from notebook hotspot_summary)
+CLUSTER_TO_STATION = {
+    5: 'Upparpet',
+    0: 'Malleshwaram',
+    1: 'HAL Old Airport',
+    2: 'HSR Layout',
+    4: 'Kodigehalli',
+    3: 'Chikkajala',
+}
+ 
 
+def prepare_features(input_data):
+    """Build feature vector in the exact order the models were trained on."""
+    if feature_names is None:
+        return None
+    try:
+        row = [input_data.get(f, 0) for f in feature_names]
+        return np.array([row])
+    except Exception as e:
+        print(f"prepare_features error: {e}")
+        return None
+ 
 def find_zone(latitude, longitude):
-    """Identify zone using the actual K-Means model"""
-    if kmeans_model is None or scaler is None:
+    """Assign zone using the trained KMeans model + geo scaler."""
+    if kmeans_model is None or geo_scaler is None:
         return 'Unknown', 'N/A'
-    
-    point_scaled = scaler.transform([[latitude, longitude]])
-    cluster = kmeans_model.predict(point_scaled)[0]
-    
-    zone_name = f'Zone {cluster}'
-    station = HOTSPOT_ZONES.get(zone_name, {}).get('station', 'N/A')
-    return zone_name, station
+    try:
+        coords_scaled = geo_scaler.transform([[latitude, longitude]])
+        cluster_id    = int(kmeans_model.predict(coords_scaled)[0])
+        zone_name     = f'Zone {cluster_id}'
+        station       = CLUSTER_TO_STATION.get(cluster_id, 'N/A')
+        return zone_name, station
+    except Exception as e:
+        print(f"find_zone error: {e}")
+        return 'Unknown', 'N/A'
+ 
 
 
 @app.route('/health', methods=['GET'])
@@ -248,16 +261,16 @@ def zone_analytics():
     return jsonify(zone_stats), 200
 
 def classify_severity(score):
-    """Classify severity score into categories"""
-    if score < 2:
+    """Notebook violation_severity is 1–5, not 0–10."""
+    if score <= 2:
         return 'Low'
-    elif score < 4:
+    elif score <= 3:
         return 'Medium'
-    elif score < 6:
+    elif score <= 4:
         return 'High'
     else:
         return 'Critical'
-
+ 
 def get_risk_recommendation(probability):
     """Get recommendation based on risk probability"""
     if probability > 0.75:
