@@ -450,13 +450,6 @@ CMD ["sh", "-c", "python app.py & streamlit run dashboard.py"]
 
 ---
 
-## 📖 Documentation
-
-- **Full Setup Guide**: [SETUP_GUIDE.md](SETUP_GUIDE.md)
-- **API Reference**: See endpoints section above
-
----
-
 ## 🔐 Security Notes
 
 - API runs on localhost by default
