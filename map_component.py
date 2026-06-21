@@ -28,7 +28,7 @@ def _violation_radius(violations):
 
 def fetch_zone_data(api_url):
     """
-    Fetch live zone data from /analytics/map endpoint.
+    Fetch live zone data from /analytics/map sssendpoint.
     Returns list of zone dicts or None on failure.
     """
     try:

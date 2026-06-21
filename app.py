@@ -116,7 +116,8 @@ def health():
             gbr_model is not None,
             rf_model is not None,
             kmeans_model is not None,
-            feature_names is not None
+            feature_names is not None,
+            geo_scaler is not None,
         ])
     }), 200
 
@@ -269,6 +270,7 @@ def zone_analytics():
     }
     return jsonify(zone_stats), 200
 
+#The new endpoint for analytics map
 @app.route('/analytics/map', methods=['GET'])
 def analytics_map():
     """
